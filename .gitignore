@@ -1,0 +1,15 @@
+# Build artifacts
+.build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Package manager
+.swiftpm/
+
+# Debug logs
+*.log
