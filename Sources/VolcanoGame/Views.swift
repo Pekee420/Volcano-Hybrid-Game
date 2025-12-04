@@ -760,340 +760,351 @@ struct GameView: View {
     let blazeGreen = Color(red: 0.0, green: 0.6, blue: 0.2)
     let purpleHaze = Color(red: 0.5, green: 0.2, blue: 0.6)
     let goldLeaf = Color(red: 0.85, green: 0.65, blue: 0.1)
+    let darkGanja = Color(red: 0.05, green: 0.08, blue: 0.05)
 
     var body: some View {
-        ZStack {
-            // Main game content
-            VStack(spacing: 0) {
-                // Top: Round and player info
-                VStack(spacing: 6) {
-                    Text("Round \(gameState.currentRound) of \(gameState.settings.totalRounds)")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color.orange.opacity(0.5))
-                        .cornerRadius(6)
-                    
-                    if let player = gameState.currentPlayer {
-                        Text(player.name)
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.9))
-                            .cornerRadius(8)
-
-                        Text("\(player.points) points")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.yellow)
-                    }
-                }
-                .padding(.top, 20)
-
-            Spacer()
-
-            // Center: Main game bubble
+        GeometryReader { geo in
+            let scale = min(geo.size.width, geo.size.height) / 600 // Base scale on 600pt
+            let bubbleSize = 200 * scale
+            let fontSize = scale
+            
             ZStack {
-                switch gameState.gamePhase {
-                case .preparation:
-                    // Orange prep bubble
-                    Circle()
-                        .fill(Color.orange.opacity(0.8))
-                        .frame(width: 200, height: 200)
-                        .overlay(
-                            VStack(spacing: 8) {
-                                Text("🍃")
-                                    .font(.system(size: 40))
-                                Text("GET READY!")
-                                    .font(.headline)
-                                    .fontWeight(.black)
-                                    .foregroundColor(.white)
-                                Text("Hold SPACE")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                        )
-
-                case .active:
-                    // Green/red bubble based on button state
-                    Circle()
-                        .fill(gameState.isButtonPressed ? blazeGreen.opacity(0.9) : Color.red.opacity(0.8))
-                        .frame(width: 200, height: 200)
-                        .overlay(
-                            VStack(spacing: 8) {
-                                Text(gameState.isButtonPressed ? "🔥" : "⚠️")
-                                    .font(.system(size: 50))
-                                Text(gameState.isButtonPressed ? "BLAZING!" : "PRESS!")
-                                    .font(.headline)
-                                    .fontWeight(.black)
-                                    .foregroundColor(.white)
-                            }
-                        )
-
-                case .completed:
-                    Circle()
-                        .fill(blazeGreen.opacity(0.9))
-                        .frame(width: 220, height: 220)
-                        .overlay(
-                            VStack(spacing: 4) {
-                                Text("✅")
-                                    .font(.system(size: 30))
-                                Text(String(format: "%.1fs", gameState.lastDrawTime))
-                                    .font(.system(size: 48, weight: .black, design: .rounded))
-                                    .foregroundColor(.white)
-                                Text("SUCCESS!")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white.opacity(0.9))
-                                Text("+\(gameState.lastPointsEarned) pts")
-                                    .font(.headline)
-                                    .fontWeight(.black)
-                                    .foregroundColor(.yellow)
-                            }
-                        )
-
-                case .failed:
-                    Circle()
-                        .fill(Color.red.opacity(0.9))
-                        .frame(width: 220, height: 220)
-                        .overlay(
-                            VStack(spacing: 4) {
-                                Text("💨")
-                                    .font(.system(size: 30))
-                                Text(String(format: "%.1fs", gameState.lastDrawTime))
-                                    .font(.system(size: 48, weight: .black, design: .rounded))
-                                    .foregroundColor(.white)
-                                Text("FAILED!")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white.opacity(0.9))
-                                if gameState.lastPointsEarned > 0 {
-                                    Text("+\(gameState.lastPointsEarned) pts")
-                                        .font(.headline)
-                                        .fontWeight(.black)
-                                        .foregroundColor(.yellow)
-                                } else {
-                                    Text("0 pts")
-                                        .font(.headline)
-                                        .fontWeight(.black)
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                        )
-                    
-                case .eliminated:
-                    Circle()
-                        .fill(Color.black)
-                        .frame(width: 200, height: 200)
-                        .overlay(Circle().stroke(Color.red, lineWidth: 4))
-                        .overlay(
-                            VStack(spacing: 8) {
-                                Text("💀")
-                                    .font(.system(size: 50))
-                                Text("ELIMINATED")
-                                    .font(.headline)
-                                    .fontWeight(.black)
-                                    .foregroundColor(.red)
-                                if let name = gameState.eliminatedPlayerName {
-                                    Text(name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.white)
-                                }
-                            }
-                        )
-
-                case .paused:
-                    Circle()
-                        .fill(Color.blue.opacity(0.8))
-                        .frame(width: 200, height: 200)
-                        .overlay(
-                            VStack(spacing: 8) {
-                                Text("⏭️")
-                                    .font(.system(size: 40))
-                                Text("Next Up:")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.8))
-                                if let upcomingPlayer = gameState.upcomingPlayer {
-                                    Text(upcomingPlayer.name)
-                                        .font(.title3)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.white)
-                                }
-                            }
-                        )
-
-                default:
-                    EmptyView()
-                }
-            }
-
-            Spacer()
-
-            // Countdown bar (only during active phases)
-            if gameState.gamePhase == .active || gameState.gamePhase == .preparation {
-                VStack(spacing: 6) {
-                    Text(gameState.gamePhase == .preparation ? "Prep Time" : "Hold Time")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(width: 300, height: 20)
-
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(gameState.gamePhase == .preparation ? Color.orange : blazeGreen)
-                            .frame(width: max(0, 300 * CGFloat(gameState.timeRemaining / max(1, gameState.gamePhase == .preparation ? gameState.settings.preparationTime : gameState.cycleDuration))), height: 20)
-                    }
-
-                    Text(String(format: "%.1f", max(0, gameState.timeRemaining)))
-                        .font(.title)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .monospacedDigit()
-                }
-                .padding(.bottom, 20)
-            }
-
-            // Bottom: Temperature and Stop button
-            HStack(spacing: 30) {
-                // Temperature display
-                VStack(spacing: 4) {
-                    Text("🌡️ TEMP")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                    
-                    Text(bluetoothManager.currentTemperature > 0 ? "\(bluetoothManager.currentTemperature)°C" : "--")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.orange)
-                    
-                    HStack(spacing: 15) {
-                        Button(action: {
-                            BluetoothManager.shared.decreaseTemperature()
-                            if gameState.settings.temperature > 40 {
-                                gameState.settings.temperature -= 5
-                            }
-                        }) {
-                            Image(systemName: "minus.circle.fill")
-                                .font(.title3)
-                                .foregroundColor(.blue)
-                        }
+                // Dark ganja background gradient
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.02, green: 0.05, blue: 0.02),
+                        Color(red: 0.08, green: 0.12, blue: 0.06),
+                        Color(red: 0.02, green: 0.05, blue: 0.02)
+                    ]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
+                // Main game content
+                VStack(spacing: 0) {
+                    // Top: Round and player info
+                    VStack(spacing: 6 * scale) {
+                        Text("Round \(gameState.currentRound) of \(gameState.settings.totalRounds)")
+                            .font(.system(size: 14 * fontSize))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12 * scale)
+                            .padding(.vertical, 4 * scale)
+                            .background(Color.orange.opacity(0.5))
+                            .cornerRadius(6 * scale)
                         
-                        Text("\(gameState.settings.temperature)°")
-                            .font(.caption)
+                        if let player = gameState.currentPlayer {
+                            Text(player.name)
+                                .font(.system(size: 28 * fontSize, weight: .bold))
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 16 * scale)
+                                .padding(.vertical, 6 * scale)
+                                .background(Color.white.opacity(0.9))
+                                .cornerRadius(8 * scale)
+
+                            Text("\(player.points) points")
+                                .font(.system(size: 16 * fontSize, weight: .semibold))
+                                .foregroundColor(.yellow)
+                        }
+                    }
+                    .padding(.top, 20 * scale)
+
+                Spacer()
+
+                // Center: Main game bubble
+                ZStack {
+                    switch gameState.gamePhase {
+                    case .preparation:
+                        // Orange prep bubble
+                        Circle()
+                            .fill(Color.orange.opacity(0.8))
+                            .frame(width: bubbleSize, height: bubbleSize)
+                            .overlay(
+                                VStack(spacing: 8 * scale) {
+                                    Text("🍃")
+                                        .font(.system(size: 40 * fontSize))
+                                    Text("GET READY!")
+                                        .font(.system(size: 18 * fontSize, weight: .black))
+                                        .foregroundColor(.white)
+                                    Text("Hold SPACE")
+                                        .font(.system(size: 12 * fontSize))
+                                        .foregroundColor(.white.opacity(0.8))
+                                }
+                            )
+
+                    case .active:
+                        // Green/red bubble based on button state
+                        Circle()
+                            .fill(gameState.isButtonPressed ? blazeGreen.opacity(0.9) : Color.red.opacity(0.8))
+                            .frame(width: bubbleSize, height: bubbleSize)
+                            .overlay(
+                                VStack(spacing: 8 * scale) {
+                                    Text(gameState.isButtonPressed ? "🔥" : "⚠️")
+                                        .font(.system(size: 50 * fontSize))
+                                    Text(gameState.isButtonPressed ? "BLAZING!" : "PRESS!")
+                                        .font(.system(size: 18 * fontSize, weight: .black))
+                                        .foregroundColor(.white)
+                                }
+                            )
+
+                    case .completed:
+                        Circle()
+                            .fill(blazeGreen.opacity(0.9))
+                            .frame(width: bubbleSize * 1.1, height: bubbleSize * 1.1)
+                            .overlay(
+                                VStack(spacing: 4 * scale) {
+                                    Text("✅")
+                                        .font(.system(size: 30 * fontSize))
+                                    Text(String(format: "%.1fs", gameState.lastDrawTime))
+                                        .font(.system(size: 48 * fontSize, weight: .black, design: .rounded))
+                                        .foregroundColor(.white)
+                                    Text("SUCCESS!")
+                                        .font(.system(size: 12 * fontSize, weight: .bold))
+                                        .foregroundColor(.white.opacity(0.9))
+                                    Text("+\(gameState.lastPointsEarned) pts")
+                                        .font(.system(size: 18 * fontSize, weight: .black))
+                                        .foregroundColor(.yellow)
+                                }
+                            )
+
+                    case .failed:
+                        Circle()
+                            .fill(Color.red.opacity(0.9))
+                            .frame(width: bubbleSize * 1.1, height: bubbleSize * 1.1)
+                            .overlay(
+                                VStack(spacing: 4 * scale) {
+                                    Text("💨")
+                                        .font(.system(size: 30 * fontSize))
+                                    Text(String(format: "%.1fs", gameState.lastDrawTime))
+                                        .font(.system(size: 48 * fontSize, weight: .black, design: .rounded))
+                                        .foregroundColor(.white)
+                                    Text("FAILED!")
+                                        .font(.system(size: 12 * fontSize, weight: .bold))
+                                        .foregroundColor(.white.opacity(0.9))
+                                    if gameState.lastPointsEarned > 0 {
+                                        Text("+\(gameState.lastPointsEarned) pts")
+                                            .font(.system(size: 18 * fontSize, weight: .black))
+                                            .foregroundColor(.yellow)
+                                    } else {
+                                        Text("0 pts")
+                                            .font(.system(size: 18 * fontSize, weight: .black))
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                            )
+                        
+                    case .eliminated:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: bubbleSize, height: bubbleSize)
+                            .overlay(Circle().stroke(Color.red, lineWidth: 4 * scale))
+                            .overlay(
+                                VStack(spacing: 8 * scale) {
+                                    Text("💀")
+                                        .font(.system(size: 50 * fontSize))
+                                    Text("ELIMINATED")
+                                        .font(.system(size: 18 * fontSize, weight: .black))
+                                        .foregroundColor(.red)
+                                    if let name = gameState.eliminatedPlayerName {
+                                        Text(name)
+                                            .font(.system(size: 14 * fontSize))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                            )
+
+                    case .paused:
+                        Circle()
+                            .fill(Color.blue.opacity(0.8))
+                            .frame(width: bubbleSize, height: bubbleSize)
+                            .overlay(
+                                VStack(spacing: 8 * scale) {
+                                    Text("⏭️")
+                                        .font(.system(size: 40 * fontSize))
+                                    Text("Next Up:")
+                                        .font(.system(size: 12 * fontSize))
+                                        .foregroundColor(.white.opacity(0.8))
+                                    if let upcomingPlayer = gameState.upcomingPlayer {
+                                        Text(upcomingPlayer.name)
+                                            .font(.system(size: 20 * fontSize, weight: .bold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                            )
+
+                    default:
+                        EmptyView()
+                    }
+                }
+
+                Spacer()
+
+                // Countdown bar (only during active phases)
+                if gameState.gamePhase == .active || gameState.gamePhase == .preparation {
+                    VStack(spacing: 6 * scale) {
+                        Text(gameState.gamePhase == .preparation ? "Prep Time" : "Hold Time")
+                            .font(.system(size: 12 * fontSize))
+                            .foregroundColor(.gray)
+
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 8 * scale)
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 300 * scale, height: 20 * scale)
+
+                            RoundedRectangle(cornerRadius: 8 * scale)
+                                .fill(gameState.gamePhase == .preparation ? Color.orange : blazeGreen)
+                                .frame(width: max(0, 300 * scale * CGFloat(gameState.timeRemaining / max(1, gameState.gamePhase == .preparation ? gameState.settings.preparationTime : gameState.cycleDuration))), height: 20 * scale)
+                        }
+
+                        Text(String(format: "%.1f", max(0, gameState.timeRemaining)))
+                            .font(.system(size: 28 * fontSize, weight: .bold))
+                            .foregroundColor(.white)
+                            .monospacedDigit()
+                    }
+                    .padding(.bottom, 20 * scale)
+                }
+
+                // Bottom: Temperature and Stop button
+                HStack(spacing: 30 * scale) {
+                    // Temperature display
+                    VStack(spacing: 4 * scale) {
+                        Text("🌡️ TEMP")
+                            .font(.system(size: 10 * fontSize))
                             .foregroundColor(.gray)
                         
-                        Button(action: {
-                            BluetoothManager.shared.increaseTemperature()
-                            if gameState.settings.temperature < 230 {
-                                gameState.settings.temperature += 5
-                            }
-                        }) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title3)
-                                .foregroundColor(.red)
-                        }
-                    }
-                }
-                .padding(.horizontal, 15)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(10)
-                
-                // Stop button - costs 10 points!
-                Button(action: {
-                    // Deduct 10 points from current player
-                    if let currentPlayer = gameState.currentPlayer,
-                       let index = gameState.players.firstIndex(where: { $0.id == currentPlayer.id }) {
-                        gameState.players[index].points -= 10
-                    }
-                    gameState.resetGame()
-                }) {
-                    VStack(spacing: 2) {
-                        Text("🛑 STOP")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Text("-10 pts")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.7))
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.red.opacity(0.8))
-                    .cornerRadius(10)
-                }
-            }
-            .padding(.bottom, 20)
-            } // End main VStack
-            
-            // Floating Leaderboard - Top Left
-            VStack {
-                HStack {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("🏆 Standings")
-                            .font(.headline)
-                            .fontWeight(.bold)
-                            .foregroundColor(goldLeaf)
+                        Text(bluetoothManager.currentTemperature > 0 ? "\(bluetoothManager.currentTemperature)°C" : "--")
+                            .font(.system(size: 22 * fontSize, weight: .bold))
+                            .foregroundColor(.orange)
                         
-                        VStack(spacing: 4) {
-                            ForEach(Array(gameState.rankedPlayers.enumerated()), id: \.element.id) { index, player in
-                                HStack(spacing: 6) {
-                                    Text(index == 0 ? "🥇" : index == 1 ? "🥈" : index == 2 ? "🥉" : "\(index + 1).")
-                                        .font(.caption)
-                                        .frame(width: 22)
-                                    
-                                    Text(player.name)
-                                        .font(.caption)
-                                        .fontWeight(player.id == gameState.currentPlayer?.id ? .bold : .regular)
-                                        .foregroundColor(player.id == gameState.currentPlayer?.id ? goldLeaf : .white)
-                                        .lineLimit(1)
-                                    
-                                    Spacer()
-                                    
-                                    Text("\(player.points)")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(player.isEliminated ? .red : (index == 0 ? .yellow : .white))
+                        HStack(spacing: 15 * scale) {
+                            Button(action: {
+                                BluetoothManager.shared.decreaseTemperature()
+                                if gameState.settings.temperature > 40 {
+                                    gameState.settings.temperature -= 5
                                 }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(player.id == gameState.currentPlayer?.id ? blazeGreen.opacity(0.3) : Color.clear)
-                                )
-                                .opacity(player.isEliminated ? 0.5 : 1.0)
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 20 * fontSize))
+                                    .foregroundColor(.blue)
+                            }
+                            
+                            Text("\(gameState.settings.temperature)°")
+                                .font(.system(size: 12 * fontSize))
+                                .foregroundColor(.gray)
+                            
+                            Button(action: {
+                                BluetoothManager.shared.increaseTemperature()
+                                if gameState.settings.temperature < 230 {
+                                    gameState.settings.temperature += 5
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 20 * fontSize))
+                                    .foregroundColor(.red)
                             }
                         }
-                        
-                        // Game info
-                        HStack {
-                            Text("💨 \(String(format: "%.0f", gameState.cycleDuration))s")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                        }
-                        .padding(.top, 4)
                     }
-                    .padding(12)
-                    .frame(width: 180)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(purpleHaze.opacity(0.5), lineWidth: 1)
-                    )
+                    .padding(.horizontal, 15 * scale)
+                    .padding(.vertical, 10 * scale)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(10 * scale)
+                    
+                    // Stop button - costs 10 points!
+                    Button(action: {
+                        // Deduct 10 points from current player
+                        if let currentPlayer = gameState.currentPlayer,
+                           let index = gameState.players.firstIndex(where: { $0.id == currentPlayer.id }) {
+                            gameState.players[index].points -= 10
+                        }
+                        gameState.resetGame()
+                    }) {
+                        VStack(spacing: 2 * scale) {
+                            Text("🛑 STOP")
+                                .font(.system(size: 16 * fontSize, weight: .semibold))
+                                .foregroundColor(.white)
+                            Text("-10 pts")
+                                .font(.system(size: 10 * fontSize))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        .padding(.horizontal, 20 * scale)
+                        .padding(.vertical, 10 * scale)
+                        .background(Color.red.opacity(0.8))
+                        .cornerRadius(10 * scale)
+                    }
+                }
+                .padding(.bottom, 20 * scale)
+                } // End main VStack
+                
+                // Floating Leaderboard - Top Left
+                VStack {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 8 * scale) {
+                            Text("🏆 Standings")
+                                .font(.system(size: 16 * fontSize, weight: .bold))
+                                .foregroundColor(goldLeaf)
+                            
+                            VStack(spacing: 4 * scale) {
+                                ForEach(Array(gameState.rankedPlayers.enumerated()), id: \.element.id) { index, player in
+                                    HStack(spacing: 6 * scale) {
+                                        Text(index == 0 ? "🥇" : index == 1 ? "🥈" : index == 2 ? "🥉" : "\(index + 1).")
+                                            .font(.system(size: 12 * fontSize))
+                                            .frame(width: 22 * scale)
+                                        
+                                        Text(player.name)
+                                            .font(.system(size: 12 * fontSize, weight: player.id == gameState.currentPlayer?.id ? .bold : .regular))
+                                            .foregroundColor(player.id == gameState.currentPlayer?.id ? goldLeaf : .white)
+                                            .lineLimit(1)
+                                        
+                                        Spacer()
+                                        
+                                        Text("\(player.points)")
+                                            .font(.system(size: 12 * fontSize, weight: .bold))
+                                            .foregroundColor(player.isEliminated ? .red : (index == 0 ? .yellow : .white))
+                                    }
+                                    .padding(.horizontal, 8 * scale)
+                                    .padding(.vertical, 3 * scale)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4 * scale)
+                                            .fill(player.id == gameState.currentPlayer?.id ? blazeGreen.opacity(0.3) : Color.clear)
+                                    )
+                                    .opacity(player.isEliminated ? 0.5 : 1.0)
+                                }
+                            }
+                            
+                            // Game info
+                            HStack {
+                                Text("💨 \(String(format: "%.0f", gameState.cycleDuration))s")
+                                    .font(.system(size: 10 * fontSize))
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(.top, 4 * scale)
+                        }
+                        .padding(12 * scale)
+                        .frame(width: 180 * scale)
+                        .background(Color.black.opacity(0.85))
+                        .cornerRadius(12 * scale)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12 * scale)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [blazeGreen, purpleHaze, blazeGreen],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 2 * scale
+                                )
+                        )
+                        .shadow(color: blazeGreen.opacity(0.4), radius: 10 * scale)
+                        
+                        Spacer()
+                    }
+                    .padding(.leading, 15 * scale)
+                    .padding(.top, 15 * scale)
                     
                     Spacer()
                 }
-                .padding(.leading, 15)
-                .padding(.top, 15)
-                
-                Spacer()
-            }
-        } // End ZStack
+            } // End ZStack
+        } // End GeometryReader
     }
 }
 

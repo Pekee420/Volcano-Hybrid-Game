@@ -50,8 +50,6 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     
     @Published var currentTemperature: Int = 0
     private var targetTemperature: Int = 180
-    private var lastTemperature: Int = 0
-    private var heaterAutoManage: Bool = true // Auto-manage heater during gameplay
 
     @Published var discoveredDevices: [(peripheral: CBPeripheral, rssi: Int, name: String)] = []
 
@@ -567,29 +565,12 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
                 print("🌡️ Temperature read (2-byte): \(tempCelsius)°C (raw: \(tempRaw))")
             }
             
-            // Detect temperature falloff - heater likely turned off
+            // Update temperature - only auto-manage heater during waitingForTemp phase
             DispatchQueue.main.async {
-                let previousTemp = self.lastTemperature
                 self.currentTemperature = tempCelsius
-                
-                // If temp dropped by 1°C or more and we have auto-manage enabled
-                if self.heaterAutoManage && previousTemp > 0 && tempCelsius > 0 {
-                    if previousTemp - tempCelsius >= 1 {
-                        print("⚠️ Temperature falloff detected! \(previousTemp)°C → \(tempCelsius)°C - Turning heater back ON")
-                        self.startHeater()
-                        self.setTemperature(self.targetTemperature)
-                    }
-                }
-                
-                self.lastTemperature = tempCelsius
+                // Heater auto-manage is now handled by WaitingForTempView only
             }
         }
     }
     
-    // Enable/disable automatic heater management
-    func setHeaterAutoManage(_ enabled: Bool) {
-        heaterAutoManage = enabled
-        print("🔥 Heater auto-manage: \(enabled ? "ON" : "OFF")")
-    }
-
 }

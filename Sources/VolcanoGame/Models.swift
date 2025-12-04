@@ -164,19 +164,14 @@ class GameState: ObservableObject {
         case .setup, .finished:
             // Start idle timer - turn off heater after 30 sec
             print("⏱️ Starting idle timer - heater will turn off in 30 sec if no action")
-            BluetoothManager.shared.setHeaterAutoManage(false)
             idleTimer = Timer.scheduledTimer(withTimeInterval: idleTimeout, repeats: false) { [weak self] _ in
                 print("💤 Idle timeout - turning heater OFF")
                 BluetoothManager.shared.stopHeater()
             }
             
-        case .waitingForTemp:
-            // Actively waiting for temp - keep heater on, enable auto-manage
-            BluetoothManager.shared.setHeaterAutoManage(true)
-            
-        case .preparation, .active, .completed, .failed, .paused, .eliminated:
-            // Game is running - enable heater auto-manage
-            BluetoothManager.shared.setHeaterAutoManage(true)
+        case .waitingForTemp, .preparation, .active, .completed, .failed, .paused, .eliminated:
+            // Game is running - heater managed by WaitingForTempView only
+            break
         }
     }
 
@@ -237,10 +232,10 @@ class GameState: ObservableObject {
             }
         }
 
-        // Move to next player (skip AI players - they're handled separately)
+        // Move to next player (skip eliminated only - AI is handled in completeCycle)
         repeat {
             currentPlayerIndex = (currentPlayerIndex + 1) % players.count
-        } while (players[currentPlayerIndex].isEliminated || players[currentPlayerIndex].isAI) && activePlayers.count > 1
+        } while players[currentPlayerIndex].isEliminated && activePlayers.count > 1
 
         if activePlayers.count <= 1 {
             saveGameToLeaderboard() // Save human players only
