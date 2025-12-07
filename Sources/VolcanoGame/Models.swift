@@ -152,8 +152,9 @@ class GameState: ObservableObject {
     @Published var lastDrawTime: TimeInterval = 0 // How long player held on last cycle
     @Published var lastPointsEarned: Int = 0 // Points earned on last cycle
     
+    // Idle timer disabled to avoid unintended heater toggles
     private var idleTimer: Timer?
-    private let idleTimeout: TimeInterval = 30.0 // Turn off heater after 30 sec idle in menu
+    private let idleTimeout: TimeInterval = 30.0 // UNUSED
     
     private func handlePhaseChange(from oldPhase: GamePhase, to newPhase: GamePhase) {
         // Cancel any existing idle timer
@@ -162,16 +163,28 @@ class GameState: ObservableObject {
         
         switch newPhase {
         case .setup, .finished:
-            // Start idle timer - turn off heater after 30 sec
-            print("⏱️ Starting idle timer - heater will turn off in 30 sec if no action")
-            idleTimer = Timer.scheduledTimer(withTimeInterval: idleTimeout, repeats: false) { [weak self] _ in
-                print("💤 Idle timeout - turning heater OFF")
-                BluetoothManager.shared.stopHeater()
-            }
+            // Allow heater commands in menu
+            BluetoothManager.shared.blockHeaterCommands = false
+            BluetoothManager.shared.heaterLockedDuringCycle = false
+            BluetoothManager.shared.heaterCommandsAllowed = true
+            BluetoothManager.shared.currentPhase = "setup/finished"
+            // Idle timer removed to prevent heater toggling
             
-        case .waitingForTemp, .preparation, .active, .completed, .failed, .paused, .eliminated:
-            // Game is running - heater managed by WaitingForTempView only
-            break
+        case .waitingForTemp:
+            // Allow heater commands during temp wait
+            BluetoothManager.shared.blockHeaterCommands = false
+            BluetoothManager.shared.heaterLockedDuringCycle = false
+            BluetoothManager.shared.heaterCommandsAllowed = true
+            BluetoothManager.shared.currentPhase = "waitingForTemp"
+            
+        case .preparation, .active, .completed, .failed, .paused, .eliminated:
+            // BLOCK heater commands during active gameplay to prevent toggling
+            BluetoothManager.shared.blockHeaterCommands = true
+            BluetoothManager.shared.heaterLockedDuringCycle = true
+            BluetoothManager.shared.heaterCommandsAllowed = false
+            BluetoothManager.shared.currentPhase = "\(newPhase)"
+            // Block pump stop during active phase to prevent rapid ON/OFF triggering heater
+            BluetoothManager.shared.blockPumpStopDuringCycle = (newPhase == .active)
         }
     }
 
@@ -208,6 +221,10 @@ class GameState: ObservableObject {
 
     func removePlayer(at index: Int) {
         players.remove(at: index)
+    }
+    
+    func removePlayer(id: UUID) {
+        players.removeAll { $0.id == id }
     }
 
     func nextPlayer() {
@@ -277,7 +294,8 @@ class GameState: ObservableObject {
         gamePhase = .active
         timeRemaining = cycleDuration
         
-        // Double-check: is spacebar ACTUALLY pressed right now?
+        #if os(macOS)
+        // Double-check: is spacebar ACTUALLY pressed right now? (macOS only)
         let spacebarActuallyPressed = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(49))
         
         // Only consider button pressed if BOTH our state says so AND spacebar is physically held
@@ -292,9 +310,18 @@ class GameState: ObservableObject {
             buttonPressStartTime = nil
             print("⏰ Active phase started - player NOT ready (spacebar not held)")
         }
+        #else
+        // iOS - trust the isButtonPressed state from touch
+        if isButtonPressed {
+            buttonPressStartTime = Date()
+            BluetoothManager.shared.startAirPump()
+            print("⏰ Active phase started - player holding, PUMP ON!")
+        } else {
+            print("⏰ Active phase started - player NOT ready")
+        }
+        #endif
 
-        // Start fan for cooling during the cycle
-        BluetoothManager.shared.startFan()
+        // Fan removed - it was toggling the heater. Air pump is all we need.
 
         SoundManager.shared.playCountdownSound()
     }
@@ -302,9 +329,9 @@ class GameState: ObservableObject {
     func completeCycle(success: Bool, drawTime: TimeInterval = 0) {
         guard var player = currentPlayer else { return }
 
-        // Stop the air pump and fan when cycle ends
-        BluetoothManager.shared.stopAirPump()
-        BluetoothManager.shared.stopFan()
+        // Stop the air pump (force=true to bypass block) when cycle ends
+        BluetoothManager.shared.stopAirPump(force: true)
+        // Fan removed - was toggling heater
         
         // Store draw time for display
         lastDrawTime = drawTime
@@ -357,16 +384,18 @@ class GameState: ObservableObject {
             var wasEliminated = false
             if settings.hardcoreMode {
                 player.isEliminated = true
+                player.points -= 15 // Elimination penalty
                 wasEliminated = true
                 eliminatedPlayerName = player.name
                 SoundManager.shared.playEliminationSound()
-                print("💀 \(player.name) eliminated (hardcore mode)")
+                print("💀 \(player.name) eliminated (hardcore mode) -15 pts")
             } else if player.consecutiveFailures >= 3 {
                 player.isEliminated = true
+                player.points -= 15 // Elimination penalty
                 wasEliminated = true
                 eliminatedPlayerName = player.name
                 SoundManager.shared.playEliminationSound()
-                print("💀 \(player.name) eliminated (3 failures in a row)")
+                print("💀 \(player.name) eliminated (3 failures in a row) -15 pts")
             }
             
             // Show elimination screen if player was eliminated
@@ -399,11 +428,18 @@ class GameState: ObservableObject {
             if activePlayers.count <= 1 {
                 saveGameToLeaderboard()
                 gamePhase = .finished
+                SoundManager.shared.playWinnerSound()
                 return
             }
             
             // Move to next non-eliminated, non-AI player
             nextPlayer()
+            
+            // IMPORTANT: Check if game ended due to rounds being complete
+            if gamePhase == .finished {
+                SoundManager.shared.playWinnerSound()
+                return
+            }
             
             // Check if next player is Snoop Dogg AI
             if let current = currentPlayer, current.isAI {
@@ -421,37 +457,40 @@ class GameState: ObservableObject {
     func simulateSnoopTurn(yourScore: Int, yourDrawTime: TimeInterval, success: Bool) {
         guard let snoopIndex = players.firstIndex(where: { $0.isAI }) else { return }
         
-        print("🐕 Snoop Dogg's turn! Cycle duration: \(cycleDuration)s")
+        print("🐕 Snoop Dogg's turn! Cycle: \(cycleDuration)s, You: \(yourScore)pts/\(String(format: "%.1f", yourDrawTime))s")
         
-        // Snoop performs independently - he's a pro smoker!
-        // Base draw time is 60-100% of cycle duration
-        let baseDrawTime = cycleDuration * Double.random(in: 0.6...1.0)
-        
-        // Snoop has 65% chance to complete the full cycle
-        let snoopCompletes = Double.random(in: 0...1) < 0.65
-        
+        // Snoop tries to match your performance - he's competitive but beatable
         var snoopPoints = 0
         var snoopDrawTime: TimeInterval = 0
         
-        if snoopCompletes {
-            // Snoop completes the full cycle
-            snoopDrawTime = cycleDuration
-            // 3 points per second
-            snoopPoints = Int(snoopDrawTime * 3)
-            // +7 completion bonus
-            snoopPoints += 7
-            // +10 for long cycles
-            if cycleDuration > 15 {
-                snoopPoints += 10
-            }
-            players[snoopIndex].completedCycles += 1
-            print("🐕 Snoop completed! Full \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) points")
-        } else {
-            // Snoop releases early - gets 40-80% of cycle
-            snoopDrawTime = cycleDuration * Double.random(in: 0.4...0.8)
-            snoopPoints = Int(snoopDrawTime * 3)
+        // 35% worse, 35% similar, 30% better
+        let roll = Double.random(in: 0...1)
+        
+        if roll < 0.35 {
+            // Snoop does worse - coughs early (35%)
+            snoopDrawTime = cycleDuration * Double.random(in: 0.25...0.55)
+            snoopPoints = Int(snoopDrawTime * 2)
             players[snoopIndex].failedCycles += 1
-            print("🐕 Snoop released early at \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) points")
+            print("🐕 Snoop coughed at \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) pts")
+        } else if roll < 0.70 {
+            // Snoop does similar to you (35%)
+            if success {
+                snoopDrawTime = cycleDuration
+                snoopPoints = max(yourScore - Int.random(in: 2...8), Int(cycleDuration * 2))
+                players[snoopIndex].completedCycles += 1
+                print("🐕 Snoop matched at \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) pts")
+            } else {
+                snoopDrawTime = yourDrawTime * Double.random(in: 0.7...1.1)
+                snoopPoints = Int(snoopDrawTime * 2)
+                players[snoopIndex].failedCycles += 1
+                print("🐕 Snoop also failed at \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) pts")
+            }
+        } else {
+            // Snoop does better (30%)
+            snoopDrawTime = cycleDuration
+            snoopPoints = Int(snoopDrawTime * 2) + 4
+            players[snoopIndex].completedCycles += 1
+            print("🐕 Snoop nailed it at \(String(format: "%.1f", snoopDrawTime))s = \(snoopPoints) pts")
         }
         
         players[snoopIndex].points += snoopPoints
@@ -509,6 +548,17 @@ class GameState: ObservableObject {
         
         // Remove any existing AI players first
         players.removeAll { $0.isAI }
+        
+        // Reset all player stats for fresh game
+        for i in players.indices {
+            players[i].points = 0
+            players[i].isEliminated = false
+            players[i].completedCycles = 0
+            players[i].failedCycles = 0
+            players[i].consecutiveFailures = 0
+            players[i].skippedLastTurn = false
+            players[i].cyclePenalty = 0
+        }
         
         // Count human players
         let humanPlayers = players.filter { !$0.isAI }
@@ -590,6 +640,9 @@ class GameState: ObservableObject {
             resetPlayer.isEliminated = false
             resetPlayer.completedCycles = 0
             resetPlayer.failedCycles = 0
+            resetPlayer.consecutiveFailures = 0 // Reset failure streak!
+            resetPlayer.skippedLastTurn = false
+            resetPlayer.cyclePenalty = 0
             return resetPlayer
         }
         currentPlayerIndex = 0

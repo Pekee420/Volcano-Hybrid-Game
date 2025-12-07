@@ -1,15 +1,28 @@
-# Build artifacts
+# Xcode user-specific files
+*.xcuserstate
+*.xcuserdatad
+xcuserdata/
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+!default.pbxuser
+*.xcworkspace
+!default.xcworkspace
+
+# Build directories
 .build/
-*.xcodeproj/xcuserdata/
 DerivedData/
+*.hmap
+*.ipa
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+Package.resolved
 
 # macOS
 .DS_Store
-*.swp
-*~
 
-# Package manager
-.swiftpm/
-
-# Debug logs
-*.log
+# Debug files
+DEBUG_CONTEXT.txt

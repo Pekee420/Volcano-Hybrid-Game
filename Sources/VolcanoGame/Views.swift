@@ -294,19 +294,28 @@ struct WaitingForTempView: View {
     private func startHeatingAndCheck() {
         // Always try to turn on heater and set temp when entering this view
         print("🔥 Starting heater - temp: \(bluetoothManager.currentTemperature)°C, target: \(gameState.settings.temperature)°C")
-        BluetoothManager.shared.startHeater()
+        
+        // If we already left waitingForTemp, abort
+        guard gameState.gamePhase == .waitingForTemp else {
+            print("⚠️ Skipping heater start - not in waitingForTemp")
+            return
+        }
+        
+        // Only send heater start if we believe it's off to avoid toggle behavior
+        if !BluetoothManager.shared.heaterIsOn {
+            BluetoothManager.shared.startHeater()
+        } else {
+            print("⚠️ Skipping heater start (heaterIsOn=true)")
+        }
         BluetoothManager.shared.setTemperature(gameState.settings.temperature)
         
-        // Check temperature every 2 seconds and keep heater on
-        var heaterRetryCount = 0
+        // Check temperature every 2 seconds; no heater retries to avoid toggling
         checkTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            heaterRetryCount += 1
-            
-            // Keep trying to turn heater on every 5 checks (10 seconds) until temp rises
-            if heaterRetryCount % 5 == 0 || bluetoothManager.currentTemperature == 0 {
-                print("🔥 Heater retry #\(heaterRetryCount) - temp: \(bluetoothManager.currentTemperature)°C")
-                BluetoothManager.shared.startHeater()
-                BluetoothManager.shared.setTemperature(gameState.settings.temperature)
+            // Stop retries if we left waitingForTemp
+            guard gameState.gamePhase == .waitingForTemp else {
+                print("⚠️ Exiting heater check - phase changed to \(gameState.gamePhase)")
+                checkTimer?.invalidate()
+                return
             }
             
             if isReady && !isPumping {
@@ -1009,28 +1018,25 @@ struct GameView: View {
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(10 * scale)
                     
-                    // Stop button - costs 10 points!
+                    // Stop session button - ends game and shows results
                     Button(action: {
                         // Deduct 10 points from current player
                         if let currentPlayer = gameState.currentPlayer,
                            let index = gameState.players.firstIndex(where: { $0.id == currentPlayer.id }) {
                             gameState.players[index].points -= 10
                         }
-                        gameState.resetGame()
+                        gameState.saveGameToLeaderboard()
+                        gameState.gamePhase = .finished
                     }) {
-                        VStack(spacing: 2 * scale) {
-                            Text("🛑 STOP")
-                                .font(.system(size: 16 * fontSize, weight: .semibold))
-                                .foregroundColor(.white)
-                            Text("-10 pts")
-                                .font(.system(size: 10 * fontSize))
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        .padding(.horizontal, 20 * scale)
-                        .padding(.vertical, 10 * scale)
-                        .background(Color.red.opacity(0.8))
-                        .cornerRadius(10 * scale)
+                        Text("Stop Session")
+                            .font(.system(size: 11 * fontSize))
+                            .foregroundColor(.white.opacity(0.6))
+                            .padding(.horizontal, 12 * scale)
+                            .padding(.vertical, 6 * scale)
+                            .background(Color.gray.opacity(0.3))
+                            .cornerRadius(6 * scale)
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.bottom, 20 * scale)
                 } // End main VStack

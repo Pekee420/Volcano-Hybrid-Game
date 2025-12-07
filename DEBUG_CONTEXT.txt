@@ -1,0 +1,69 @@
+VolcanoGame heater/pump toggle issue - context for handoff (2025-12-06)
+
+What we observe now
+-------------------
+- During player cycles (prep/active) the debug log shows only air pump writes:
+  - AIR ON: UUID 10110013 (value 0x01)
+  - AIR OFF: UUID 10110014 (value 0x00)
+- No heater START commands are emitted during the spacebar cycle window in current logs.
+- Heater STOP commands appear only on non-cycle transitions (e.g., when phase moved to setup/finished) or were ignored when phase was active.
+- Heater still flips ON/OFF on the device while holding space (i.e., while pump runs), so the Volcano likely treats pump writes or timing as a heater toggle or the device firmware toggles heater when seeing pump start/stop.
+
+APK reference (com-storz-bickel.apk, decompiled)
+-----------------------------------------------
+- UUIDs match: HeaterOn 1011000F, HeaterOff 10110010, AirOn 10110013, AirOff 10110014.
+- APK heater control: writeHeaterStatus(on) sends HeaterOnUUID OR HeaterOffUUID, one shot, no retries; separate from air.
+- APK air control: writeAirStatus(on) sends only AirOn/AirOff, no heater writes paired.
+- There is a helper turnHeatAirOffWithoutBroadcast (HeaterOff + AirOff) likely used on shutdown; normal air start/stop doesn’t touch heater.
+- Temperature write is separate (TargetTemperatureUUID).
+
+Recent code changes (current state)
+-----------------------------------
+- Heater/temperature writes allowlisted to phases: setup/finished/waitingForTemp. Blocked in prep/active.
+- startHeater skips if heaterIsOn flag is true; rate-limited; phase allowlist.
+- setTemperature skips outside allowlist; rate-limits duplicate temp (8s).
+- stopHeater now only allowed in the allowlist phases; skipped in prep/active.
+- Waiting-for-temp views: heater start sent once if heaterIsOn == false; removed heater retries.
+- Pump start/stop deduped; air ON/OFF only. Pump no longer blocks heater.
+- Idle heater auto-stop removed (idle timer disabled).
+- heaterIsOn flag tracked; exposed read-only.
+- ContentView no longer auto-stops heater/fan/pump on disappear.
+
+Current behavior from logs (latest tail)
+----------------------------------------
+Example entries (03:32–04:10):
+- Air ON/OFF around spacebar cycles; no heater STARTs during prep/active windows.
+- Heater STOP sometimes logged when phase was not allowed (ignored) or earlier when phase changed to setup.
+- Heater STARTs occur only in waitingForTemp/setup flows.
+Despite this, user reports heater flips while holding space (pump running).
+
+Hypothesis
+----------
+- Volcano firmware may treat AirOn/AirOff sequences as a toggle for heater, or heater state changes when pump stops/starts.
+- Alternatively, an auto-stop from phase changes (to setup/failed) may be toggling heater just after pump stop.
+
+Possible next fixes
+-------------------
+1) Make heater fully manual like APK:
+   - Do not send heater STOP automatically on any phase change.
+   - Send heater START only once when user explicitly toggles or when entering waitingForTemp (optionally remove that auto-start too).
+   - Never pair heater with pump; leave heater state untouched during gameplay.
+2) Avoid temp writes after waitingForTemp; only user-driven.
+3) If flips persist, adjust pump sequencing (e.g., don’t send AirOff immediately on key-up; keep pump on a fixed 5s window like preheat; or skip pump stop if heater should stay on).
+
+Files touched
+-------------
+- Sources/VolcanoGame/BluetoothManager.swift
+- Sources/VolcanoGame/Models.swift
+- Sources/VolcanoGame/ContentView.swift (removed auto-stop on disappear)
+- Sources/VolcanoGame/Views.swift (waitingForTemp)
+- iOS/iOSContentView.swift (waitingForTemp)
+
+Log location
+------------
+- ~/Desktop/VolcanoGame_Debug.log
+
+Repo path
+---------
+/Users/petermaksimenko/TradeRunner/VolcanoGame
+

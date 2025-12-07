@@ -288,12 +288,12 @@ struct ContentView: View {
             gameState.isButtonPressed = false
             
             if gameState.gamePhase == .active {
-                // Stop pump
-                bluetoothManager.stopAirPump()
-                print("🛑 Pump OFF - spacebar actually released")
-                logToFile("🛑 Pump OFF - spacebar actually released")
+                // DON'T stop pump here - completeCycle() will handle it
+                // This prevents rapid Air ON/OFF cycling which triggers firmware heater toggle
+                print("🎹 Spacebar released - pump stays on until cycle ends")
+                logToFile("🎹 Spacebar released - pump stays on until cycle ends")
                 
-                // Calculate points and end cycle
+                // Calculate points and end cycle (completeCycle stops the pump)
                 let drawTime = gameState.buttonPressStartTime != nil ?
                     Date().timeIntervalSince(gameState.buttonPressStartTime!) : 0
                 gameState.buttonPressStartTime = nil

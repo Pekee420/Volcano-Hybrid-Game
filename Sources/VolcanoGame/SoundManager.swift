@@ -5,19 +5,44 @@
 //  Created by AI Assistant on 2024.
 //
 
-import AppKit
+import Foundation
 import AVFoundation
 
-class SoundManager {
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
+@available(iOS 16.0, macOS 12.0, *)
+class SoundManager: ObservableObject {
     static let shared = SoundManager()
     
+    @Published var volume: Float = 1.0 {
+        didSet {
+            UserDefaults.standard.set(volume, forKey: "soundVolume")
+            audioPlayer?.volume = volume
+        }
+    }
+    @Published var isMuted: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isMuted, forKey: "soundMuted")
+        }
+    }
+    
+    #if os(macOS)
     private var speechSynthesizer = NSSpeechSynthesizer()
+    #else
+    private var speechSynthesizer = AVSpeechSynthesizer()
+    #endif
     private var audioPlayer: AVAudioPlayer?
     private var consecutiveSuccesses = 0
     
-    // Sound files folder - in the app's mp3 directory
+    // Sound files folder
     private var soundsFolder: URL? {
-        // Try to find mp3 folder relative to executable
+        #if os(iOS)
+        return Bundle.main.resourceURL?.appendingPathComponent("mp3")
+        #else
         let executableURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
         let appFolder = executableURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let mp3Folder = appFolder.appendingPathComponent("mp3")
@@ -26,22 +51,24 @@ class SoundManager {
             return mp3Folder
         }
         
-        // Fallback: try current working directory
         let cwdMp3 = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("mp3")
         if FileManager.default.fileExists(atPath: cwdMp3.path) {
             return cwdMp3
         }
         
-        // Fallback: hardcoded path for development
-        let devPath = URL(fileURLWithPath: "/Users/petermaksimenko/TradeRunner/VolcanoGame/mp3")
-        if FileManager.default.fileExists(atPath: devPath.path) {
-            return devPath
-        }
+        // Removed hardcoded dev path
         
         return nil
+        #endif
     }
 
     private init() {
+        // Load saved settings
+        if UserDefaults.standard.object(forKey: "soundVolume") != nil {
+            volume = UserDefaults.standard.float(forKey: "soundVolume")
+        }
+        isMuted = UserDefaults.standard.bool(forKey: "soundMuted")
+        
         if let folder = soundsFolder {
             print("🔊 Sound files found at: \(folder.path)")
         } else {
@@ -133,6 +160,11 @@ class SoundManager {
     // MARK: - Sound Playing Helpers
     
     private func playSound(_ name: String) -> Bool {
+        guard !isMuted else {
+            print("🔇 Sound muted, skipping: \(name)")
+            return true
+        }
+        
         guard let folder = soundsFolder else {
             print("❌ No sounds folder!")
             return false
@@ -144,8 +176,9 @@ class SoundManager {
             do {
                 audioPlayer?.stop()
                 audioPlayer = try AVAudioPlayer(contentsOf: url)
+                audioPlayer?.volume = volume
                 audioPlayer?.play()
-                print("🔊 Playing: \(name).mp3")
+                print("🔊 Playing: \(name).mp3 at volume \(volume)")
                 return true
             } catch {
                 print("❌ Error playing \(name): \(error)")
@@ -157,14 +190,24 @@ class SoundManager {
     }
     
     private func speak(_ text: String, rate: Float = 0.5) {
+        #if os(macOS)
         speechSynthesizer.rate = rate
         speechSynthesizer.startSpeaking(text)
+        #else
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = rate * AVSpeechUtteranceDefaultSpeechRate
+        speechSynthesizer.speak(utterance)
+        #endif
     }
     
     /// Stop any currently playing sound
     func stopAllSounds() {
         audioPlayer?.stop()
+        #if os(macOS)
         speechSynthesizer.stopSpeaking()
+        #else
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        #endif
     }
     
     /// Reset consecutive success counter

@@ -9,9 +9,31 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var gameState: GameState
+    @StateObject private var soundManager = SoundManager.shared
+    @State private var volcanoBrightnessDouble: Double = Double(UserDefaults.standard.integer(forKey: "volcanoBrightness") == 0 ? 100 : UserDefaults.standard.integer(forKey: "volcanoBrightness"))
     @Environment(\.dismiss) var dismiss
+    
+    private var volcanoBrightness: Int {
+        Int(volcanoBrightnessDouble)
+    }
 
     var body: some View {
+        settingsContent
+        #if os(macOS)
+            .frame(minWidth: 400, minHeight: 500)
+        #endif
+            .onAppear {
+                let saved = UserDefaults.standard.integer(forKey: "volcanoBrightness")
+                if saved > 0 {
+                    volcanoBrightnessDouble = Double(saved)
+                } else if BluetoothManager.shared.currentBrightness > 0 {
+                    volcanoBrightnessDouble = Double(BluetoothManager.shared.currentBrightness)
+                }
+            }
+    }
+    
+    @ViewBuilder
+    private var settingsContent: some View {
         VStack(spacing: 20) {
             Text("Game Settings")
                 .font(.largeTitle)
@@ -54,10 +76,36 @@ struct SettingsView: View {
 
                 Section(header: Text("Game Mode")) {
                     Toggle("Hardcore Mode", isOn: $gameState.settings.hardcoreMode)
-                        .toggleStyle(.switch)
 
                     if gameState.settings.hardcoreMode {
                         Text("Players are eliminated when they fail to complete a cycle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Section(header: Text("Sound")) {
+                    Toggle("Mute All Sounds", isOn: $soundManager.isMuted)
+                    
+                    if !soundManager.isMuted {
+                        VStack(alignment: .leading) {
+                            Text("Volume: \(Int(soundManager.volume * 100))%")
+                            Slider(value: $soundManager.volume, in: 0...1, step: 0.1)
+                        }
+                    }
+                }
+                
+                Section(header: Text("Volcano Display")) {
+                    VStack(alignment: .leading) {
+                        Text("LED Brightness: \(volcanoBrightness)%")
+                        Slider(value: $volcanoBrightnessDouble, in: 0...100, step: 10)
+                            .onChange(of: volcanoBrightnessDouble) { newValue in
+                                BluetoothManager.shared.setBrightness(Int(newValue))
+                            }
+                    }
+                    
+                    if !BluetoothManager.shared.isConnected {
+                        Text("Connect to Volcano to adjust brightness")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -70,6 +118,7 @@ struct SettingsView: View {
             HStack {
                 Button("Reset to Defaults") {
                     gameState.settings = GameSettings()
+                    volcanoBrightnessDouble = 100
                 }
                 .foregroundColor(.red)
 
@@ -78,12 +127,13 @@ struct SettingsView: View {
                 Button("Done") {
                     dismiss()
                 }
+                #if os(macOS)
                 .keyboardShortcut(.defaultAction)
+                #endif
             }
             .padding(.horizontal)
         }
         .padding()
-        .frame(minWidth: 400, minHeight: 500)
     }
 }
 

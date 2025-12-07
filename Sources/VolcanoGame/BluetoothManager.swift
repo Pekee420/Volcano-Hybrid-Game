@@ -22,9 +22,9 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private let airOnUUID = CBUUID(string: "10110013-5354-4F52-5A26-4249434B454C")
     private let airOffUUID = CBUUID(string: "10110014-5354-4F52-5A26-4249434B454C")
 
-    // Fan control characteristics
-    private let fanOnUUID = CBUUID(string: "10110011-5354-4F52-5A26-4249434B454C")
-    private let fanOffUUID = CBUUID(string: "10110012-5354-4F52-5A26-4249434B454C")
+    // Boost control characteristics (NOT fan - these toggle heater boost mode!)
+    private let boostOnUUID = CBUUID(string: "10110011-5354-4F52-5A26-4249434B454C")
+    private let boostOffUUID = CBUUID(string: "10110012-5354-4F52-5A26-4249434B454C")
 
     // Temperature characteristics (from Volcano Hybrid BLE protocol)
     private let tempWriteUUID = CBUUID(string: "10110003-5354-4F52-5A26-4249434B454C") // Write target temp
@@ -33,23 +33,25 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     // Heater control characteristics (Volcano Hybrid)
     private let heaterOnUUID = CBUUID(string: "1011000F-5354-4F52-5A26-4249434B454C")  // Turn heater on
     private let heaterOffUUID = CBUUID(string: "10110010-5354-4F52-5A26-4249434B454C") // Turn heater off
-    // Alternative heater UUIDs to try
-    private let heaterOnAltUUID = CBUUID(string: "10110005-5354-4F52-5A26-4249434B454C")
-    private let heaterOffAltUUID = CBUUID(string: "10110006-5354-4F52-5A26-4249434B454C")
+    
+    // LED Brightness characteristic
+    private let ledBrightnessUUID = CBUUID(string: "10110005-5354-4F52-5A26-4249434B454C")
 
     private var airOnCharacteristic: CBCharacteristic?
     private var airOffCharacteristic: CBCharacteristic?
-    private var fanOnCharacteristic: CBCharacteristic?
-    private var fanOffCharacteristic: CBCharacteristic?
+    private var boostOnCharacteristic: CBCharacteristic?
+    private var boostOffCharacteristic: CBCharacteristic?
     private var tempWriteCharacteristic: CBCharacteristic?
     private var tempReadCharacteristic: CBCharacteristic?
     private var heaterOnCharacteristic: CBCharacteristic?
     private var heaterOffCharacteristic: CBCharacteristic?
-    private var heaterOnAltCharacteristic: CBCharacteristic?
-    private var heaterOffAltCharacteristic: CBCharacteristic?
+    private var ledBrightnessCharacteristic: CBCharacteristic?
+    
+    @Published var currentBrightness: Int = 100  // 0-100%
     
     @Published var currentTemperature: Int = 0
     private var targetTemperature: Int = 180
+    private var airPumpRunning: Bool = false
 
     @Published var discoveredDevices: [(peripheral: CBPeripheral, rssi: Int, name: String)] = []
 
@@ -64,6 +66,21 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     @Published var connectionState: String = "Not Connected"
     @Published var isConnected: Bool = false
     @Published var isScanning: Bool = false
+    
+    // Allow heater start commands only when the current phase permits (set by GameState)
+    var heaterCommandsAllowed: Bool = true
+    // Track phase for logging/debug
+    var currentPhase: String = "unknown"
+    // Phases in which heater/temperature writes are allowed
+    private let allowedHeaterPhases: Set<String> = ["setup/finished", "waitingForTemp"]
+    // Track last known heater state to avoid sending toggle-on to an already-on heater
+    private(set) var heaterIsOn: Bool = false
+    private var lastTemperatureSetAt: Date?
+    private var lastTemperatureValue: Int?
+    
+    // Rate limiting heater start commands to avoid rapid cycling
+    private var lastHeaterStartAt: Date?
+    private let minHeaterStartInterval: TimeInterval = 8.0
 
     private func logDebugEvent(_ message: String, timestamp: Date = Date()) {
         let logMessage = "\(timestamp): \(message)\n"
@@ -86,12 +103,35 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         }
     }
 
+    private let bluetoothQueue = DispatchQueue(label: "com.volcanoblaze.bluetooth", qos: .userInitiated)
+    private var hasInitialized = false
+    
     override init() {
         super.init()
         print("🔧 BluetoothManager init() called")
-        _centralManager = CBCentralManager(delegate: self, queue: nil)
-        print("🔧 CBCentralManager created")
-        print("🔧 Initial Bluetooth state: \(_centralManager.state.rawValue)")
+        
+        #if os(iOS)
+        // On iOS, delay CBCentralManager creation to prevent startup lag
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.initializeBluetooth()
+        }
+        #else
+        // On macOS, initialize immediately
+        initializeBluetooth()
+        #endif
+    }
+    
+    private func initializeBluetooth() {
+        guard !hasInitialized else { return }
+        hasInitialized = true
+        
+        print("🔧 Initializing CBCentralManager...")
+        _centralManager = CBCentralManager(delegate: self, queue: bluetoothQueue)
+        print("🔧 CBCentralManager created on background queue")
+        
+        DispatchQueue.main.async {
+            print("🔧 Initial Bluetooth state: \(self._centralManager.state.rawValue)")
+        }
 
         // Start periodic state checking since delegate callbacks might be delayed
         startStateMonitoring()
@@ -156,19 +196,37 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     }
 
     func startScanning() {
+        // Ensure Bluetooth is initialized first
+        guard hasInitialized else {
+            print("⚠️ Bluetooth not yet initialized, deferring scan")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.startScanning()
+            }
+            return
+        }
+        
         print("🔍 startScanning called - state: \(_centralManager.state.rawValue), isScanning: \(isScanning)")
         guard _centralManager.state == .poweredOn else {
             print("❌ Cannot scan - Bluetooth not powered on (state: \(_centralManager.state.rawValue))")
+            DispatchQueue.main.async {
+                self.connectionState = "Bluetooth not ready"
+            }
             return
         }
         guard !BluetoothManager.shared.isScanning else {
             print("⚠️ Already scanning, skipping")
             return
         }
-        BluetoothManager.shared.isScanning = true
-        _centralManager.scanForPeripherals(withServices: nil, options: nil)
-        connectionState = "Scanning for devices..."
-        print("🔍 Started Bluetooth scan for all peripherals")
+        
+        bluetoothQueue.async { [weak self] in
+            guard let self = self else { return }
+            BluetoothManager.shared.isScanning = true
+            self._centralManager.scanForPeripherals(withServices: nil, options: nil)
+            DispatchQueue.main.async {
+                self.connectionState = "Scanning for devices..."
+            }
+            print("🔍 Started Bluetooth scan for all peripherals")
+        }
     }
 
     func stopScanning() {
@@ -183,12 +241,14 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         _volcanoPeripheral = peripheral
         _centralManager.connect(peripheral, options: nil)
         stopScanning()
+        heaterIsOn = false
     }
 
     func disconnect() {
         if let peripheral = _volcanoPeripheral {
             _centralManager.cancelPeripheralConnection(peripheral)
         }
+        heaterIsOn = false
     }
 
     func startAirPump() {
@@ -196,21 +256,47 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         print("🚀 START AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOnCharacteristic != nil)")
         logDebugEvent("🚀 START AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOnCharacteristic != nil)", timestamp: timestamp)
 
+        // Avoid redundant start commands while already running
+        if airPumpRunning {
+            print("⚠️ Air pump already running - start command skipped")
+            logDebugEvent("⚠️ Air pump already running - start skipped", timestamp: timestamp)
+            return
+        }
+
         guard let characteristic = airOnCharacteristic, isConnected else {
             print("❌ CANNOT START AIR PUMP - Connected: \(isConnected), HasChar: \(airOnCharacteristic != nil)")
             logDebugEvent("❌ CANNOT START AIR PUMP - Connected: \(isConnected), HasChar: \(airOnCharacteristic != nil)", timestamp: timestamp)
             return
         }
+        airPumpRunning = true
         let data = Data([0x01])
         _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
         print("🚀 AIR PUMP START SENT: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)")
         logDebugEvent("🚀 AIR PUMP START SENT: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)", timestamp: timestamp)
     }
 
-    func stopAirPump() {
+    // Track if we should block pump stop during active gameplay
+    var blockPumpStopDuringCycle = false
+    
+    func stopAirPump(force: Bool = false) {
         let timestamp = Date()
-        print("🛑 STOP AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOffCharacteristic != nil)")
-        logDebugEvent("🛑 STOP AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOffCharacteristic != nil)", timestamp: timestamp)
+        print("🛑 STOP AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOffCharacteristic != nil), force: \(force), blockPumpStop: \(blockPumpStopDuringCycle)")
+        logDebugEvent("🛑 STOP AIR PUMP CALLED - Connected: \(isConnected), HasChar: \(airOffCharacteristic != nil), force: \(force), blockPumpStop: \(blockPumpStopDuringCycle)", timestamp: timestamp)
+
+        // Block pump stop during active cycle unless forced (cycle end)
+        // This prevents rapid Air ON/OFF which triggers firmware heater toggle
+        if blockPumpStopDuringCycle && !force {
+            print("⚠️ Air pump stop BLOCKED during active cycle (prevents heater toggle)")
+            logDebugEvent("⚠️ Air pump stop BLOCKED during active cycle (prevents heater toggle)", timestamp: timestamp)
+            return
+        }
+
+        // Avoid redundant stop commands when already stopped
+        if !airPumpRunning {
+            print("⚠️ Air pump already stopped - stop command skipped")
+            logDebugEvent("⚠️ Air pump already stopped - stop skipped", timestamp: timestamp)
+            return
+        }
 
         guard let characteristic = airOffCharacteristic, isConnected else {
             print("❌ CANNOT STOP AIR PUMP - Connected: \(isConnected), HasChar: \(airOffCharacteristic != nil)")
@@ -221,35 +307,88 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
         print("🛑 AIR PUMP STOP SENT: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)")
         logDebugEvent("🛑 AIR PUMP STOP SENT: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)", timestamp: timestamp)
+        airPumpRunning = false
     }
 
-    func startFan() {
-        print("💨 startFan called - isConnected: \(isConnected), hasCharacteristic: \(fanOnCharacteristic != nil)")
-        guard let characteristic = fanOnCharacteristic, isConnected else {
-            print("❌ Cannot start fan - connected: \(isConnected), characteristic: \(fanOnCharacteristic != nil)")
+    // MARK: - LED Brightness Control
+    
+    func setBrightness(_ percent: Int) {
+        print("💡 setBrightness called - value: \(percent)%, isConnected: \(isConnected), hasCharacteristic: \(ledBrightnessCharacteristic != nil)")
+        guard let characteristic = ledBrightnessCharacteristic, isConnected else {
+            print("❌ Cannot set brightness - connected: \(isConnected), characteristic: \(ledBrightnessCharacteristic != nil)")
             return
         }
-        let data = Data([0x01])
+        
+        // Clamp to 0-100
+        let clampedPercent = max(0, min(100, percent))
+        
+        // Volcano uses direct percent value as UInt16 little-endian (0-100)
+        let brightnessValue = UInt16(clampedPercent)
+        var value = brightnessValue.littleEndian
+        let data = Data(bytes: &value, count: 2)
+        
         _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
-        print("💨 Fan START command sent: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)")
-    }
-
-    func stopFan() {
-        print("🌀 stopFan called - isConnected: \(isConnected), hasCharacteristic: \(fanOffCharacteristic != nil)")
-        guard let characteristic = fanOffCharacteristic, isConnected else {
-            print("❌ Cannot stop fan - connected: \(isConnected), characteristic: \(fanOffCharacteristic != nil)")
-            return
+        print("💡 Brightness SET: \(clampedPercent)% (raw bytes: \(data.map { String(format: "%02x", $0) }.joined())) to \(characteristic.uuid)")
+        
+        // Save to UserDefaults
+        UserDefaults.standard.set(clampedPercent, forKey: "volcanoBrightness")
+        
+        DispatchQueue.main.async {
+            self.currentBrightness = clampedPercent
         }
-        let data = Data([0x00]) // Use 0x00 to stop
-        _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
-        print("🌀 Fan STOP command sent: 0x\(data.map { String(format: "%02x", $0) }.joined()) to \(characteristic.uuid)")
     }
     
     // MARK: - Heater Control
     
+    // Flag to prevent heater commands during active gameplay
+    var blockHeaterCommands = false
+    // Extra guard to completely freeze heater state during cycle (start/stop ignored)
+    var heaterLockedDuringCycle = false
+    
     func startHeater() {
-        print("🔥 startHeater called - isConnected: \(isConnected)")
-        print("   heaterOn: \(heaterOnCharacteristic != nil), heaterOnAlt: \(heaterOnAltCharacteristic != nil)")
+        print("🔥 startHeater called - isConnected: \(isConnected), blocked: \(blockHeaterCommands), locked: \(heaterLockedDuringCycle), pumpRunning: \(airPumpRunning), phase: \(currentPhase)")
+        print("   heaterOn: \(heaterOnCharacteristic != nil)")
+        
+        guard !blockHeaterCommands else {
+            print("⚠️ Heater command blocked (blockHeaterCommands=true) phase: \(currentPhase)")
+            logDebugEvent("⚠️ Heater start blocked (blockHeaterCommands=true) phase: \(currentPhase)")
+            return
+        }
+        
+        guard !heaterLockedDuringCycle else {
+            print("⚠️ Heater start ignored (heaterLockedDuringCycle=true)")
+            logDebugEvent("⚠️ Heater start ignored (locked during cycle) phase: \(currentPhase)")
+            return
+        }
+        
+        guard heaterCommandsAllowed else {
+            print("⚠️ Heater start ignored (heaterCommandsAllowed=false) phase: \(currentPhase)")
+            logDebugEvent("⚠️ Heater start ignored (phase disallows heater) phase: \(currentPhase)")
+            return
+        }
+        
+        // Explicit phase allowlist: only setup/finished/waitingForTemp may start heater
+        if !allowedHeaterPhases.contains(currentPhase) {
+            print("⚠️ Heater start ignored (phase not allowed): \(currentPhase)")
+            logDebugEvent("⚠️ Heater start ignored (phase not allowed): \(currentPhase)")
+            return
+        }
+
+        // If we already believe heater is on, do not send another start (heater toggles)
+        if heaterIsOn {
+            print("⚠️ Heater start skipped - heaterIsOn flag true (avoid toggle)")
+            logDebugEvent("⚠️ Heater start skipped - heaterIsOn=true (avoid toggle)")
+            return
+        }
+        
+        // Rate-limit heater start to prevent rapid on/off toggling
+        let now = Date()
+        if let last = lastHeaterStartAt, now.timeIntervalSince(last) < minHeaterStartInterval {
+            let delta = now.timeIntervalSince(last)
+            print("⚠️ Heater start skipped - rate limited (\(String(format: "%.1f", delta))s since last)")
+            logDebugEvent("⚠️ Heater start skipped - rate limited (\(String(format: "%.1f", delta))s since last)")
+            return
+        }
         
         guard isConnected else {
             print("❌ Cannot start heater - not connected")
@@ -262,23 +401,25 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         if let characteristic = heaterOnCharacteristic {
             _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
             print("🔥 Heater START sent to PRIMARY: \(characteristic.uuid)")
-        }
-        
-        // Also try alternative heater characteristic
-        if let altCharacteristic = heaterOnAltCharacteristic {
-            _volcanoPeripheral?.writeValue(data, for: altCharacteristic, type: .withResponse)
-            print("🔥 Heater START sent to ALT: \(altCharacteristic.uuid)")
-        }
-        
-        // If no heater characteristics found, try setting temperature (this often triggers heating)
-        if heaterOnCharacteristic == nil && heaterOnAltCharacteristic == nil {
+            logDebugEvent("🔥 Heater START sent to PRIMARY: \(characteristic.uuid)")
+        } else {
+            // If no heater characteristic found, try setting temperature (this often triggers heating)
             print("⚠️ No heater characteristic found - trying temp write to trigger heating")
             setTemperature(targetTemperature)
         }
+        
+        lastHeaterStartAt = now
+        heaterIsOn = true
     }
     
     func stopHeater() {
-        print("🔥 stopHeater called - isConnected: \(isConnected)")
+        print("🔥 stopHeater called - isConnected: \(isConnected), blocked: \(blockHeaterCommands), locked: \(heaterLockedDuringCycle), pumpRunning: \(airPumpRunning), phase: \(currentPhase)")
+        
+        guard allowedHeaterPhases.contains(currentPhase) else {
+            print("⚠️ Heater stop ignored (phase not allowed): \(currentPhase)")
+            logDebugEvent("⚠️ Heater stop ignored (phase not allowed): \(currentPhase)")
+            return
+        }
         
         guard isConnected else {
             print("❌ Cannot stop heater - not connected")
@@ -291,19 +432,41 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         if let characteristic = heaterOffCharacteristic {
             _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
             print("🔥 Heater STOP sent to PRIMARY: \(characteristic.uuid)")
+            logDebugEvent("🔥 Heater STOP sent to PRIMARY: \(characteristic.uuid)")
         }
-        
-        // Also try alternative heater characteristic
-        if let altCharacteristic = heaterOffAltCharacteristic {
-            _volcanoPeripheral?.writeValue(data, for: altCharacteristic, type: .withResponse)
-            print("🔥 Heater STOP sent to ALT: \(altCharacteristic.uuid)")
-        }
+
+        heaterIsOn = false
     }
 
     // MARK: - Temperature Control
     
     func setTemperature(_ tempCelsius: Int) {
-        print("🌡️ setTemperature called - temp: \(tempCelsius)°C, isConnected: \(isConnected), hasChar: \(tempWriteCharacteristic != nil)")
+        print("🌡️ setTemperature called - temp: \(tempCelsius)°C, isConnected: \(isConnected), hasChar: \(tempWriteCharacteristic != nil), locked: \(heaterLockedDuringCycle), pumpRunning: \(airPumpRunning), phase: \(currentPhase)")
+
+        // Only allow temp writes in allowed heater phases (setup/finished/waitingForTemp)
+        if !allowedHeaterPhases.contains(currentPhase) {
+            print("⚠️ Ignoring setTemperature in disallowed phase: \(currentPhase)")
+            logDebugEvent("⚠️ Ignored setTemperature \(tempCelsius) (phase \(currentPhase))")
+            return
+        }
+
+        // Rate-limit identical temperature commands to avoid device toggling
+        let now = Date()
+        if let lastVal = lastTemperatureValue,
+           lastVal == tempCelsius,
+           let lastAt = lastTemperatureSetAt,
+           now.timeIntervalSince(lastAt) < 8.0 {
+            print("⚠️ Skipping duplicate setTemperature \(tempCelsius) (rate limited)")
+            logDebugEvent("⚠️ Skipped duplicate setTemperature \(tempCelsius) (rate limited)")
+            return
+        }
+        
+        guard !heaterLockedDuringCycle else {
+            print("⚠️ Ignoring temperature set while heaterLockedDuringCycle")
+            logDebugEvent("⚠️ Ignored setTemperature \(tempCelsius) (locked during cycle)")
+            return
+        }
+        
         guard let characteristic = tempWriteCharacteristic, isConnected else {
             print("❌ Cannot set temperature - connected: \(isConnected), characteristic: \(tempWriteCharacteristic != nil)")
             return
@@ -319,6 +482,8 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         
         _volcanoPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
         targetTemperature = tempCelsius
+        lastTemperatureValue = tempCelsius
+        lastTemperatureSetAt = now
         print("🌡️ Temperature SET command sent: \(tempCelsius)°C (0x\(data.map { String(format: "%02x", $0) }.joined())) to \(characteristic.uuid)")
         logDebugEvent("🌡️ Temperature SET: \(tempCelsius)°C")
     }
@@ -490,13 +655,13 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
                 airOffCharacteristic = characteristic
                 print("✅ Found Air Off characteristic: \(characteristic.uuid)")
                 print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
-            } else if characteristic.uuid == fanOnUUID {
-                fanOnCharacteristic = characteristic
-                print("✅ Found Fan On characteristic: \(characteristic.uuid)")
+            } else if characteristic.uuid == boostOnUUID {
+                boostOnCharacteristic = characteristic
+                print("✅ Found Boost On characteristic: \(characteristic.uuid)")
                 print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
-            } else if characteristic.uuid == fanOffUUID {
-                fanOffCharacteristic = characteristic
-                print("✅ Found Fan Off characteristic: \(characteristic.uuid)")
+            } else if characteristic.uuid == boostOffUUID {
+                boostOffCharacteristic = characteristic
+                print("✅ Found Boost Off characteristic: \(characteristic.uuid)")
                 print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
             } else if characteristic.uuid == tempWriteUUID {
                 tempWriteCharacteristic = characteristic
@@ -520,14 +685,14 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
                 heaterOffCharacteristic = characteristic
                 print("✅ Found Heater Off characteristic: \(characteristic.uuid)")
                 print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
-            } else if characteristic.uuid == heaterOnAltUUID {
-                heaterOnAltCharacteristic = characteristic
-                print("✅ Found Heater On ALT characteristic: \(characteristic.uuid)")
-                print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
-            } else if characteristic.uuid == heaterOffAltUUID {
-                heaterOffAltCharacteristic = characteristic
-                print("✅ Found Heater Off ALT characteristic: \(characteristic.uuid)")
-                print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.writeWithoutResponse) ? "WNR" : "-")")
+            } else if characteristic.uuid == ledBrightnessUUID {
+                ledBrightnessCharacteristic = characteristic
+                print("✅ Found LED Brightness characteristic: \(characteristic.uuid)")
+                print("   Properties: \(characteristic.properties.contains(.write) ? "W" : "-")\(characteristic.properties.contains(.read) ? "R" : "-")")
+                // Read current brightness
+                if characteristic.properties.contains(.read) {
+                    peripheral.readValue(for: characteristic)
+                }
             }
         }
     }
@@ -569,6 +734,16 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             DispatchQueue.main.async {
                 self.currentTemperature = tempCelsius
                 // Heater auto-manage is now handled by WaitingForTempView only
+            }
+        } else if characteristic.uuid == ledBrightnessUUID {
+            // Parse brightness - stored as UInt16 little-endian (0-100 direct percent)
+            if data.count >= 2 {
+                let brightnessRaw = UInt16(data[0]) | (UInt16(data[1]) << 8)
+                let brightnessPercent = Int(brightnessRaw)
+                print("💡 Brightness read: \(brightnessPercent)% (raw: \(brightnessRaw))")
+                DispatchQueue.main.async {
+                    self.currentBrightness = brightnessPercent
+                }
             }
         }
     }

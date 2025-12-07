@@ -34,6 +34,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        print("🛑 App terminating - stopping heater and pump")
+        BluetoothManager.shared.stopAirPump()
+        BluetoothManager.shared.stopHeater()
+        BluetoothManager.shared.blockHeaterCommands = true
+        BluetoothManager.shared.heaterLockedDuringCycle = true
+        BluetoothManager.shared.disconnect()
+    }
 }
 
 let app = NSApplication.shared
