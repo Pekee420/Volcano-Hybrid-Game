@@ -71,8 +71,9 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     var heaterCommandsAllowed: Bool = true
     // Track phase for logging/debug
     var currentPhase: String = "unknown"
-    // Phases in which heater/temperature writes are allowed
+    // Phases in which heater ON/OFF commands are allowed (temperature writes are always allowed)
     private let allowedHeaterPhases: Set<String> = ["setup/finished", "waitingForTemp"]
+    // Temperature writes are allowed in all phases (not restricted like heater commands)
     // Track last known heater state to avoid sending toggle-on to an already-on heater
     private(set) var heaterIsOn: Bool = false
     private var lastTemperatureSetAt: Date?
@@ -443,12 +444,7 @@ class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     func setTemperature(_ tempCelsius: Int) {
         print("🌡️ setTemperature called - temp: \(tempCelsius)°C, isConnected: \(isConnected), hasChar: \(tempWriteCharacteristic != nil), locked: \(heaterLockedDuringCycle), pumpRunning: \(airPumpRunning), phase: \(currentPhase)")
 
-        // Only allow temp writes in allowed heater phases (setup/finished/waitingForTemp)
-        if !allowedHeaterPhases.contains(currentPhase) {
-            print("⚠️ Ignoring setTemperature in disallowed phase: \(currentPhase)")
-            logDebugEvent("⚠️ Ignored setTemperature \(tempCelsius) (phase \(currentPhase))")
-            return
-        }
+        // Temperature writes are allowed in all phases (user can adjust temp anytime)
 
         // Rate-limit identical temperature commands to avoid device toggling
         let now = Date()
